@@ -25,7 +25,12 @@ description: |
   │
   ├─ Step 1: Agent(constraint_extractor) → chapters/chapter-{N}-constraints.md
   │
-  ├─ Step 2: Agent(composer) → chapters/chapter-{N}-context.json
+  ├─ Step 2a+2b+2c: Agent(设定读取) + Agent(台账摘要) + Agent(近文读取)  ← 并行
+  │     ├─ 2a 设定读取 → chapters/chapter-{N}-settings.json
+  │     ├─ 2b 台账摘要 → chapters/chapter-{N}-ledgers.json
+  │     └─ 2c 近文读取 → chapters/chapter-{N}-recent.json
+  │
+  ├─ Step 2d: Agent(context组装) → chapters/chapter-{N}-context.json
   │
   ├─ Step 3: Agent(writer) → chapters/chapter-{N}.md
   │
@@ -40,7 +45,7 @@ description: |
         └─ logic_reviewer → 追加到 audit.md（可选）
 ```
 
-**并行规则**：Step 5/6 无依赖可并行；Step 7/8 无依赖可并行。其余步骤严格串行。
+**并行规则**：Step 2a/2b/2c 无依赖可并行；Step 5/6 无依赖可并行；Step 7/8 无依赖可并行。其余步骤严格串行。
 
 ## 书籍目录结构
 
@@ -52,7 +57,10 @@ description: |
 └── chapters/
     ├── chapter-NNNN.md              # 正文
     ├── chapter-NNNN-constraints.md  # 硬约束（Step 1 输出）
-    ├── chapter-NNNN-context.json    # 组装上下文（Step 2 输出）
+    ├── chapter-NNNN-settings.json  # 设定文件（Step 2a 输出）
+    ├── chapter-NNNN-ledgers.json   # 台账摘要（Step 2b 输出）
+    ├── chapter-NNNN-recent.json    # 近文参考（Step 2c 输出）
+    ├── chapter-NNNN-context.json   # 最终上下文（Step 2d 输出）
     ├── chapter-NNNN-extract.json    # 提取JSON（Step 4 输出）
     ├── chapter-NNNN-audit.md        # 审计报告（Step 7 输出）
     └── archive-summary.md           # 归档摘要
@@ -92,7 +100,7 @@ description: |
 2. 重置台账：`伏笔台账.json`、`冲突台账.json`、`chapter-index.json` 写入 `[]`
 3. 重置 `character-state.json` 为 `{}`
 4. 重置 `session-handoff.md` 为初始状态（下一章：1）
-5. 删除 `chapters/` 下所有中间文件（`-audit.md`、`-constraints.md`、`-context.json`、`-extract.json`）
+5. 删除 `chapters/` 下所有中间文件（`-audit.md`、`-constraints.md`、`-settings.json`、`-ledgers.json`、`-recent.json`、`-context.json`、`-extract.json`）
 6. 等用户确认设定文件后重新开始写作
 
 ## 断点续传
@@ -102,7 +110,8 @@ description: |
 | 检查条件 | 判断 | 操作 |
 |---------|------|------|
 | `chapter-{N}-constraints.md` 存在 | Step 1 已完成 | 跳过 |
-| `chapter-{N}-context.json` 存在 | Step 2 已完成 | 跳过 |
+| `chapter-{N}-settings.json` + `ledgers.json` + `recent.json` 都存在 | Step 2a/2b/2c 已完成 | 跳过 |
+| `chapter-{N}-context.json` 存在 | Step 2d 已完成 | 跳过 |
 | `chapter-{N}.md` 存在 | Step 3 已完成 | 跳过 |
 | `chapter-{N}-extract.json` 存在 | Step 4 已完成 | 跳过 |
 | chapter-index.json 最新条目 number=N | Step 5+6 已完成 | 跳过 |
@@ -138,47 +147,110 @@ description: |
 7. Write {book_dir}/chapters/chapter-{N:04d}-constraints.md，写入提取的硬约束文本
 ```
 
-### Step 2: composer（子代理）
+### Step 2: 上下文组装（4个子代理，2a/2b/2c 并行 → 2d 串行）
+
+将原来单个 composer 拆分为 3 个并行读取子代理 + 1 个最终组装子代理，避免单次读取过多文件。
+
+#### Step 2a: 设定读取（子代理）
 
 **使用 Agent 工具**，subagent_type="general-purpose"，prompt 如下：
 
 ```
-你是上下文组装专家。任务：读取所有数据文件，按预算裁剪，组装为 writer 可用的上下文 JSON。
+你是设定文件读取专家。任务：读取世界观、角色、大纲，提取第{N}章相关内容。
 
 操作步骤：
-1. Read {book_dir}/世界观.md → 全文保留（通常<25K字符，超50K按段落裁剪）
+1. Read {book_dir}/世界观.md → 全文保留。如果超过50K字符，按段落边界裁剪，保留标题行和表格行优先
 2. Read {book_dir}/角色.md → 全文保留
 3. Read {book_dir}/大纲.md → 用 Grep 提取包含 | {N} | 的行及前后3行，≤800字
-4. Read {book_dir}/写法规则.md（如不存在则 Read {skill_dir}/shared/writing-rules.md）→ 只保留标题行+列表行，≤400字
-5. Read {skill_dir}/shared/banned-words.md → 全文保留
-6. Read {book_dir}/chapter-index.json → 提取最近15章摘要
-7. Read {book_dir}/伏笔台账.json → 筛选status≠已兑现/已关闭的条目，取前10条，content截断到50字
-8. Read {book_dir}/冲突台账.json → 筛选status≠已解决的条目，取前6条，content截断到50字
-9. Read {book_dir}/character-state.json → 每人保留最近2条changes
-10. Read {book_dir}/chapters/chapter-{N-1:04d}.md → 取后半部分2000字+末尾500字（N=1时跳过）
-11. Read {book_dir}/chapters/chapter-{N-2:04d}.md → 取末尾500字（N≤2时跳过）
-12. Read {book_dir}/chapters/chapter-{N-3:04d}.md → 取末尾500字（N≤3时跳过）
-13. Read {book_dir}/chapters/chapter-{N:04d}-constraints.md
+4. Read {book_dir}/写法规则.md（如不存在则 Read {skill_dir}/shared/writing-rules.md）→ 只保留以#、-、*、❌、✅开头的行，≤400字
 
-组装为以下 JSON 格式并 Write 到 {book_dir}/chapters/chapter-{N:04d}-context.json：
+Write {book_dir}/chapters/chapter-{N:04d}-settings.json：
+{
+  "world": "世界观全文（或裁剪后）",
+  "characters": "角色全文",
+  "outline": "本章大纲段落（≤800字）",
+  "writing_rules": "写法规则（≤400字）"
+}
+```
+
+#### Step 2b: 台账摘要（子代理）
+
+**使用 Agent 工具**，subagent_type="general-purpose"，prompt 如下：
+
+```
+你是台账数据摘要专家。任务：读取所有台账和索引文件，提取第{N}章需要的摘要信息。
+
+操作步骤：
+1. Read {book_dir}/chapter-index.json → 提取最近15章摘要（距当前章>5只保留number+title；3-5保留summary；≤2保留完整）
+2. Read {book_dir}/伏笔台账.json → 筛选status≠已兑现/已关闭的条目，取前10条，每条content截断到50字
+3. Read {book_dir}/冲突台账.json → 筛选status≠已解决的条目，取前6条，每条content截断到50字
+4. Read {book_dir}/character-state.json → 每人保留最近2条changes
+
+Write {book_dir}/chapters/chapter-{N:04d}-ledgers.json：
+{
+  "chapter_summaries": [{"num": 1, "title": "标题", "summary": "摘要"}],
+  "active_foreshadow": [{"id": "f001", "content": "伏笔内容", "planted_chapter": 3}],
+  "active_conflicts": [{"id": "c001", "content": "冲突内容", "introduced_chapter": 2}],
+  "character_state": {"角色名": {"last_seen": 4, "changes": ["..."]}}
+}
+```
+
+#### Step 2c: 近文读取（子代理）
+
+**使用 Agent 工具**，subagent_type="general-purpose"，prompt 如下：
+
+```
+你是近文参考读取专家。任务：读取前几章正文，提取衔接所需的文本片段。
+
+操作步骤：
+1. Read {book_dir}/chapters/chapter-{N-1:04d}.md → 如果文件存在，取后半部分2000字+末尾500字。如果文件不存在（N=1），recent_text 留空
+2. Read {book_dir}/chapters/chapter-{N-2:04d}.md → 如果文件存在，取末尾500字。不存在则跳过
+3. Read {book_dir}/chapters/chapter-{N-3:04d}.md → 如果文件存在，取末尾500字。不存在则跳过
+
+Write {book_dir}/chapters/chapter-{N:04d}-recent.json：
+{
+  "recent_text": "前一章后半2000字+末尾500字（N=1时为空字符串）",
+  "prev_chapters": [
+    {"num": {N-2}, "tail": "末尾500字"},
+    {"num": {N-3}, "tail": "末尾500字"}
+  ]
+}
+prev_chapters 数组只包含实际存在且成功读取的章节，不要放入空内容。
+```
+
+#### Step 2d: 最终组装（子代理，依赖 2a+2b+2c 全部完成）
+
+**使用 Agent 工具**，subagent_type="general-purpose"，prompt 如下：
+
+```
+你是上下文组装专家。任务：读取 Step 2a/2b/2c 的输出 + 共享资源，组装为 writer 可用的最终上下文。
+
+操作步骤：
+1. Read {book_dir}/chapters/chapter-{N:04d}-settings.json（Step 2a 输出）
+2. Read {book_dir}/chapters/chapter-{N:04d}-ledgers.json（Step 2b 输出）
+3. Read {book_dir}/chapters/chapter-{N:04d}-recent.json（Step 2c 输出）
+4. Read {skill_dir}/shared/banned-words.md → 全文保留
+5. Read {book_dir}/chapters/chapter-{N:04d}-constraints.md（Step 1 输出）
+
+合并为最终上下文 JSON，Write 到 {book_dir}/chapters/chapter-{N:04d}-context.json：
 {
   "chapter": {N},
   "output_path": "{book_dir}/chapters/chapter-{N:04d}.md",
   "constraints": "本章硬约束文本",
   "writing_rules": "写法规则文本",
-  "banned_words": "禁用词列表",
+  "banned_words": "禁用词列表全文",
   "world": "世界观全文",
   "characters": "角色全文",
-  "character_state": {...角色状态对象...},
+  "character_state": {...从ledgers.json取...},
   "outline": "本章大纲段落",
-  "recent_text": "前一章后半2000字+末尾500字",
-  "prev_chapters": [{"num": X, "tail": "末尾500字"}],
-  "chapter_summaries": [{"num": X, "title": "标题", "summary": "摘要"}],
-  "active_foreshadow": [{"id": "f001", "content": "伏笔内容"}],
-  "active_conflicts": [{"id": "c001", "content": "冲突内容"}]
+  "recent_text": "前一章后半+末尾",
+  "prev_chapters": [...从recent.json取...],
+  "chapter_summaries": [...从ledgers.json取...],
+  "active_foreshadow": [...从ledgers.json取...],
+  "active_conflicts": [...从ledgers.json取...]
 }
 
-裁剪策略：世界观超过50K字符时按段落裁剪；大纲≤800字；写法规则≤400字；伏笔≤10条；冲突≤6条；摘要≤15条。
+直接合并，不再做额外裁剪（裁剪已在 2a/2b/2c 中完成）。
 ```
 
 ### Step 3: writer（子代理）
