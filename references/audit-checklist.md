@@ -7,7 +7,7 @@
 
 ### 2. 跨章一致性
 回顾前文的句子用 Grep 确认与原文吻合。
-- 操作：`Grep(pattern="关键词", path="{book_dir}/chapters/", output_mode="content")`
+- 操作：`Grep(pattern="关键词", path="{book_dir}/chapters/", glob="!v1-old/**", output_mode="content")`
 - 对比前后章中同一设定/事件的描写是否矛盾
 
 ### 3. OOC

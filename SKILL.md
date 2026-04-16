@@ -18,6 +18,8 @@ description: |
 
 **核心原则：主 session 只做编排，不创作不读正文。每个步骤由独立子代理执行，通过文件通信。**
 
+**归档隔离规则**：`chapters/v1-old/` 是旧版归档目录，所有子代理在执行 Glob、Grep、Read 操作时必须排除该目录。归档内容仅供人工查阅，不参与任何自动化流程。
+
 ## 架构
 
 ```
@@ -100,7 +102,7 @@ description: |
 
 ## 全文重写流程
 
-1. 归档旧章：`chapters/chapter-*.md` 移到 `chapters/v1-old/`
+1. 归档旧章：`chapters/chapter-*.md` 移到 `chapters/v1-old/`（v1-old 为归档目录，所有 Glob/Grep/Read 操作必须排除）
 2. 重置台账：`伏笔台账.json`、`冲突台账.json`、`chapter-index.json` 写入 `[]`
 3. 重置 `character-state.json` 为 `{}`
 4. 重置 `session-handoff.md` 为初始状态（下一章：1）
