@@ -48,3 +48,40 @@
 - 世界观超过安全线（50K 字符）时，用 `## 核心约束（不可违反）` 在顶部单独提取关键规则，再附全文
 - 大纲与设定矛盾时，两者同时呈现，让 writer 自行判断
 - 面板能力展示需标注当前处于哪一层级，允许展示到什么程度
+
+## context.json 输出格式（composer 子代理输出）
+
+composer 子代理将组装好的上下文写入 `chapters/chapter-{N:04d}-context.json`，供 writer 子代理读取。
+
+```json
+{
+  "chapter": 5,
+  "output_path": "/path/to/book/chapters/chapter-0005.md",
+  "constraints": "本章硬约束文本...",
+  "writing_rules": "写法规则文本...",
+  "banned_words": "禁用词列表...",
+  "world": "世界观全文...",
+  "characters": "角色全文...",
+  "character_state": {"角色名": {"last_seen": 4, "changes": ["..."]}},
+  "outline": "本章大纲段落...",
+  "recent_text": "前一章末尾2000字...",
+  "prev_chapters": [{"num": 3, "tail": "末尾500字..."}],
+  "chapter_summaries": [{"num": 1, "title": "标题", "summary": "摘要"}],
+  "active_foreshadow": [{"id": "f001", "content": "伏笔内容"}],
+  "active_conflicts": [{"id": "c001", "content": "冲突内容"}]
+}
+```
+
+**字段约束**：
+- `chapter`：整数，当前章节号
+- `output_path`：字符串，正文输出绝对路径
+- `constraints`：≤300字
+- `writing_rules`：≤400字
+- `outline`：≤800字
+- `world`：全文或裁剪后的世界观
+- `characters`：全文或裁剪后的角色
+- `active_foreshadow`：最多10条
+- `active_conflicts`：最多6条
+- `chapter_summaries`：最近15条
+- `recent_text`：前一章后半2000字+末尾500字
+- `prev_chapters`：倒数第二、三章各末尾500字

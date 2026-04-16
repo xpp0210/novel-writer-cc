@@ -130,3 +130,28 @@
 - 冲突条数必须与 `冲突台账.json` 中 status≠已解决 的条数一致
 - 概要从 `chapter-index.json` 的 `key_events` 同步，用分号分隔
 - 概要无重复前缀（如"第3章「第3章「标题」」"是 bug）
+
+## chapter-{N:04d}-extract.json（extractor 子代理输出）
+
+```json
+{
+  "title": "章节标题",
+  "word_count": 3500,
+  "summary": "50-100字章节摘要",
+  "key_events": ["事件1", "事件2", "事件3", "事件4", "事件5"],
+  "character_changes": ["变化1", "变化2", "变化3", "变化4"],
+  "foreshadowing_activity": ["伏笔活动1", "伏笔活动2", "伏笔活动3", "伏笔活动4"],
+  "conflicts": ["冲突1", "冲突2", "冲突3"]
+}
+```
+
+**字段约束**：
+- `title`：字符串，章节标题
+- `word_count`：整数，正文字数
+- `summary`：字符串，50-100字
+- `key_events`：最多5条
+- `character_changes`：最多4条
+- `foreshadowing_activity`：最多4条
+- `conflicts`：最多3条
+
+**用途**：settler 子代理读取此文件，更新所有台账。
