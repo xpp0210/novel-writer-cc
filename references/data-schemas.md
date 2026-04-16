@@ -27,10 +27,10 @@
 - `foreshadowing_activity`：最多4条
 
 **瘦身规则**：
-- 距当前章 >5：只保留 `number` + `title`，详情归档到 `chapters/archive-summary.md`
-- 距当前章 3-5：只保留 `number` + `title` + `summary`
+- 距当前章 >5：保留 `number` + `title` + `key_events`(≤3)，详情归档到 `chapters/archive-summary.md`
+- 距当前章 3-5：保留 `number` + `title` + `summary` + `key_events`(≤3)
 - 距当前章 ≤2：保留完整字段
-- 总大小 ≤5000 字节
+- 总大小 ≤8000 字节
 
 ## 伏笔台账.json
 

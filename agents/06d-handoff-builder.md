@@ -4,7 +4,7 @@
 1. Read {book_dir}/chapter-index.json → 取最近3章概要
 2. Read {book_dir}/伏笔台账.json → 筛选 status≠已兑现/已关闭 的活跃条目（≤6条）
 3. Read {book_dir}/冲突台账.json → 筛选 status≠已解决 的活跃条目（≤4条）
-4. Read {book_dir}/character-state.json → 每人保留最近2条 changes（≤8个角色）
+4. Read {book_dir}/character-state.json → 每人保留最近5条 changes（≤8个角色）
 
 按以下模板 Write {book_dir}/session-handoff.md：
 # Session Handoff
