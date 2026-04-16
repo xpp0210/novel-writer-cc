@@ -52,7 +52,7 @@
 2. 遍历所有条目：
    - status=已兑现 → 删除 note 字段
    - status=已推进且距 planted_chapter>10 → 删除 note 字段
-   - 其他活跃条目 → note 截断到 80 字
+   - 其他活跃条目 → note 过长则改写为一句话摘要（保留 who/what/why）
 3. Write `伏笔台账.json`
 4. 对 `冲突台账.json` 执行相同操作
 

@@ -26,11 +26,10 @@
 - `character_state_changes`：最多4条
 - `foreshadowing_activity`：最多4条
 
-**瘦身规则**：
-- 距当前章 >5：保留 `number` + `title` + `key_events`(≤3)，详情归档到 `chapters/archive-summary.md`
-- 距当前章 3-5：保留 `number` + `title` + `summary` + `key_events`(≤3)
+**瘦身规则**（按字段分层，不设字节上限）：
+- 距当前章 >5：保留 `number` + `title` + `key_events`（key_events 是核心骨架，永不丢弃），详情归档到 `chapters/archive-summary.md`
+- 距当前章 3-5：保留 `number` + `title` + `summary` + `key_events`
 - 距当前章 ≤2：保留完整字段
-- 总大小 ≤8000 字节
 
 ## 伏笔台账.json
 
