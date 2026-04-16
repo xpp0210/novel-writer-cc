@@ -126,419 +126,94 @@ description: |
 
 ## 写作 Pipeline
 
-以下用 `{book_dir}` 表示书籍目录，`{N}` 表示章节号，`{skill_dir}` 表示 `~/.claude/skills/novel-writer`。
+以下用 `{book_dir}` 表示书籍目录，`{N}` 表示章节号，`{skill_dir}` 表示本 skill 目录（`~/.claude/skills/novel-writer`）。
 
-### Step 1: constraint_extractor（子代理）
+**子代理调度方式**：对每个步骤，Read `agents/{step}.md` 获取完整指令，将 `{book_dir}` 替换为实际书籍路径、`{N}` 替换为实际章节号、`{skill_dir}` 替换为 `~/.claude/skills/novel-writer`，然后作为 Agent 工具的 prompt 传入（subagent_type="general-purpose"）。
 
-**使用 Agent 工具**，subagent_type="general-purpose"，prompt 如下：
+### Step 1: constraint_extractor
 
-```
-你是约束提取专家。任务：从世界观中提取第{N}章相关的硬约束。
-
-操作步骤：
-1. Read {book_dir}/世界观.md
-2. Read {book_dir}/大纲.md — 找到包含 | {N} | 的行，了解本章核心事件
-3. Read {book_dir}/角色.md
-4. Read {book_dir}/写法规则.md（如不存在则 Read {skill_dir}/shared/writing-rules.md）
-5. 判断本章涉及哪些规则（跨阶战斗？面板能力分层？系别相性？特定角色设定？）
-6. 从世界观中提取相关段落，压缩为≤300字的"本章硬约束"
-
-提取原则：
-- 只提取本章事件直接涉及的规则
-- 优先提取"容易违反"的规则（跨阶限制、系别相性）
-- 矛盾双方同时提取（大纲vs世界观）
-- 面板能力分层展示规则
-
-7. Write {book_dir}/chapters/chapter-{N:04d}-constraints.md，写入提取的硬约束文本
-```
+Agent 文件：`agents/01-constraint-extractor.md`
+输入：世界观.md、大纲.md、角色.md、写法规则.md
+输出：`chapters/chapter-{N:04d}-constraints.md`
 
 ### Step 2: 上下文组装（4个子代理，2a/2b/2c 并行 → 2d 串行）
 
 将原来单个 composer 拆分为 3 个并行读取子代理 + 1 个最终组装子代理，避免单次读取过多文件。
 
-#### Step 2a: 设定读取（子代理）
+#### Step 2a: 设定读取（并行）
 
-**使用 Agent 工具**，subagent_type="general-purpose"，prompt 如下：
+Agent 文件：`agents/02a-settings-reader.md`
+输出：`chapters/chapter-{N:04d}-settings.json`
 
-```
-你是设定文件读取专家。任务：读取世界观、角色、大纲，提取第{N}章相关内容。
+#### Step 2b: 台账摘要（并行）
 
-操作步骤：
-1. Read {book_dir}/世界观.md → 全文保留。如果超过50K字符，按段落边界裁剪，保留标题行和表格行优先
-2. Read {book_dir}/角色.md → 全文保留
-3. Read {book_dir}/大纲.md → 用 Grep 提取包含 | {N} | 的行及前后3行，≤800字
-4. Read {book_dir}/写法规则.md（如不存在则 Read {skill_dir}/shared/writing-rules.md）→ 只保留以#、-、*、❌、✅开头的行，≤400字
+Agent 文件：`agents/02b-ledgers-reader.md`
+输出：`chapters/chapter-{N:04d}-ledgers.json`
 
-Write {book_dir}/chapters/chapter-{N:04d}-settings.json：
-{
-  "world": "世界观全文（或裁剪后）",
-  "characters": "角色全文",
-  "outline": "本章大纲段落（≤800字）",
-  "writing_rules": "写法规则（≤400字）"
-}
-```
+#### Step 2c: 近文读取（并行）
 
-#### Step 2b: 台账摘要（子代理）
+Agent 文件：`agents/02c-recent-reader.md`
+输出：`chapters/chapter-{N:04d}-recent.json`
 
-**使用 Agent 工具**，subagent_type="general-purpose"，prompt 如下：
+#### Step 2d: 最终组装（依赖 2a+2b+2c 全部完成）
 
-```
-你是台账数据摘要专家。任务：读取所有台账和索引文件，提取第{N}章需要的摘要信息。
+Agent 文件：`agents/02d-context-assembler.md`
+输出：`chapters/chapter-{N:04d}-context.json`
 
-操作步骤：
-1. Read {book_dir}/chapter-index.json → 提取最近15章摘要（距当前章>5只保留number+title；3-5保留summary；≤2保留完整）
-2. Read {book_dir}/伏笔台账.json → 筛选status≠已兑现/已关闭的条目，取前10条，每条content截断到50字
-3. Read {book_dir}/冲突台账.json → 筛选status≠已解决的条目，取前6条，每条content截断到50字
-4. Read {book_dir}/character-state.json → 每人保留最近2条changes
+### Step 3: writer
 
-Write {book_dir}/chapters/chapter-{N:04d}-ledgers.json：
-{
-  "chapter_summaries": [{"num": 1, "title": "标题", "summary": "摘要"}],
-  "active_foreshadow": [{"id": "f001", "content": "伏笔内容", "planted_chapter": 3}],
-  "active_conflicts": [{"id": "c001", "content": "冲突内容", "introduced_chapter": 2}],
-  "character_state": {"角色名": {"last_seen": 4, "changes": ["..."]}}
-}
-```
+Agent 文件：`agents/03-writer.md`
+输入：Step 2d 输出的 context.json
+输出：`chapters/chapter-{N:04d}.md`
 
-#### Step 2c: 近文读取（子代理）
+### Step 4: extractor
 
-**使用 Agent 工具**，subagent_type="general-purpose"，prompt 如下：
-
-```
-你是近文参考读取专家。任务：读取前几章正文，提取衔接所需的文本片段。
-
-操作步骤：
-1. Read {book_dir}/chapters/chapter-{N-1:04d}.md → 如果文件存在，取后半部分2000字+末尾500字。如果文件不存在（N=1），recent_text 留空
-2. Read {book_dir}/chapters/chapter-{N-2:04d}.md → 如果文件存在，取末尾500字。不存在则跳过
-3. Read {book_dir}/chapters/chapter-{N-3:04d}.md → 如果文件存在，取末尾500字。不存在则跳过
-
-Write {book_dir}/chapters/chapter-{N:04d}-recent.json：
-{
-  "recent_text": "前一章后半2000字+末尾500字（N=1时为空字符串）",
-  "prev_chapters": [
-    {"num": {N-2}, "tail": "末尾500字"},
-    {"num": {N-3}, "tail": "末尾500字"}
-  ]
-}
-prev_chapters 数组只包含实际存在且成功读取的章节，不要放入空内容。
-```
-
-#### Step 2d: 最终组装（子代理，依赖 2a+2b+2c 全部完成）
-
-**使用 Agent 工具**，subagent_type="general-purpose"，prompt 如下：
-
-```
-你是上下文组装专家。任务：读取 Step 2a/2b/2c 的输出 + 共享资源，组装为 writer 可用的最终上下文。
-
-操作步骤：
-1. Read {book_dir}/chapters/chapter-{N:04d}-settings.json（Step 2a 输出）
-2. Read {book_dir}/chapters/chapter-{N:04d}-ledgers.json（Step 2b 输出）
-3. Read {book_dir}/chapters/chapter-{N:04d}-recent.json（Step 2c 输出）
-4. Read {skill_dir}/shared/banned-words.md → 全文保留
-5. Read {book_dir}/chapters/chapter-{N:04d}-constraints.md（Step 1 输出）
-
-合并为最终上下文 JSON，Write 到 {book_dir}/chapters/chapter-{N:04d}-context.json：
-{
-  "chapter": {N},
-  "output_path": "{book_dir}/chapters/chapter-{N:04d}.md",
-  "constraints": "本章硬约束文本",
-  "writing_rules": "写法规则文本",
-  "banned_words": "禁用词列表全文",
-  "world": "世界观全文",
-  "characters": "角色全文",
-  "character_state": {...从ledgers.json取...},
-  "outline": "本章大纲段落",
-  "recent_text": "前一章后半+末尾",
-  "prev_chapters": [...从recent.json取...],
-  "chapter_summaries": [...从ledgers.json取...],
-  "active_foreshadow": [...从ledgers.json取...],
-  "active_conflicts": [...从ledgers.json取...]
-}
-
-直接合并，不再做额外裁剪（裁剪已在 2a/2b/2c 中完成）。
-```
-
-### Step 3: writer（子代理）
-
-**使用 Agent 工具**，subagent_type="general-purpose"，prompt 如下：
-
-```
-你是网文写手。任务：基于组装好的上下文创作第{N}章正文。
-
-操作步骤：
-1. Read {book_dir}/chapters/chapter-{N:04d}-context.json
-2. 基于上下文创作3000-5000字正文
-3. Write {book_dir}/chapters/chapter-{N:04d}.md
-
-严格约束：
-- 不读任何其他文件，只基于 context.json 中的内容
-- 不在正文中混入英文单词
-- 禁用词零触发（参考 context 中的 banned_words 字段）
-- 面板数据用中文格式（键：值，| 分隔）
-- 章末必须留钩子（悬念/转折/伏笔暗示/新信息）
-- 前100字必须进入场景，不要用大段背景交代开场
-- 对话要有口语感，标签多样
-- 描写要具体，避免空泛形容词
-- 情感通过动作/环境间接表达
-```
-
-### Step 4: extractor（子代理）
-
-**使用 Agent 工具**，subagent_type="general-purpose"，prompt 如下：
-
-```
-你是信息提取专家。任务：从第{N}章正文中提取结构化信息。
-
-操作步骤：
-1. Read {book_dir}/chapters/chapter-{N:04d}.md
-2. 提取以下结构化信息
-3. Write {book_dir}/chapters/chapter-{N:04d}-extract.json
-
-输出格式（严格 JSON，不要包含其他内容）：
-{
-  "title": "章节标题",
-  "word_count": 正文字数,
-  "summary": "50-100字章节摘要",
-  "key_events": ["事件1", "事件2", ...],
-  "character_changes": ["变化1", "变化2", ...],
-  "foreshadowing_activity": ["伏笔活动1", ...],
-  "conflicts": ["冲突1", ...]
-}
-
-字段约束：key_events≤5，character_changes≤4，foreshadowing_activity≤4，conflicts≤3。
-title 从正文第一个标题或第一段推断。
-word_count 统计正文中文字符数（不含标点和空格）。
-```
+Agent 文件：`agents/04-extractor.md`
+输入：Step 3 输出的 chapter.md
+输出：`chapters/chapter-{N:04d}-extract.json`
 
 ### Step 5 + 6a + 6b + 6c: 并行执行
 
-**同时发起四个 Agent 调用**（Step 4 完成后）：
+Step 4 完成后，同时发起四个 Agent 调用。
 
-#### Step 5: state_tracker（子代理）
+#### Step 5: state_tracker
 
-```
-你是角色状态追踪专家。任务：识别第{N}章中角色的实质性状态变化。
+Agent 文件：`agents/05-state-tracker.md`
+输出：`character-state.json`（覆盖写入）
 
-操作步骤：
-1. Read {book_dir}/chapters/chapter-{N:04d}.md（正文）
-2. Read {book_dir}/character-state.json（当前状态）
-3. Read {book_dir}/角色.md（角色设定）
+#### Step 6a: 索引更新
 
-判断哪些角色有实质性状态变化：
-- 只记录关系/实力/知晓秘密/立场等变化
-- 被顺带提到不算（如"张三也在场"不记录）
-- 实力变化要具体（如"F级→E级"而非"变强了"）
+Agent 文件：`agents/06a-index-updater.md`
+输出：`chapter-index.json`（覆盖写入）
 
-4. Write {book_dir}/character-state.json（覆盖写入，格式如下）：
-{
-  "角色名": {
-    "last_seen": {N},
-    "changes": [
-      "第X章：之前的变化",
-      "第{N}章：本次变化"
-    ]
-  }
-}
-注意：保留该角色之前的 changes 记录，只追加新变化。未出场的角色保持原样。
-```
+#### Step 6b: 伏笔台账更新
 
-#### Step 6a: chapter-index 更新（子代理）
+Agent 文件：`agents/06b-foreshadow-updater.md`
+输出：`伏笔台账.json`（覆盖写入）
 
-```
-你是章节索引更新专家。任务：基于 extractor 输出更新 chapter-index.json。
+#### Step 6c: 冲突台账更新
 
-操作步骤：
-1. Read {book_dir}/chapters/chapter-{N:04d}-extract.json
-2. Read {book_dir}/chapter-index.json
+Agent 文件：`agents/06c-conflict-updater.md`
+输出：`冲突台账.json`（覆盖写入）
 
-更新逻辑：
-- 如果已存在 number={N} 的条目，删除旧条目
-- 追加新条目：{number: N, title, status: "已通过", word_count, summary, key_events(≤5), character_state_changes(≤4), foreshadowing_activity(≤4)}
+### Step 6d: handoff 重建（依赖 Step 5 + 6a + 6b + 6c 全部完成）
 
-摘要瘦身：
-- 距当前章>5：只保留 number + title，详情追加到 chapters/archive-summary.md（先 Read 再追加 Write）
-- 距当前章 3-5：只保留 number + title + summary
-- 距当前章≤2：保留完整字段
-- 总大小≤5000字节：如果超限，继续压缩更早章节
-
-3. Write {book_dir}/chapter-index.json
-```
-
-#### Step 6b: 伏笔台账更新（子代理）
-
-```
-你是伏笔台账更新专家。任务：基于 extractor 输出更新伏笔台账。
-
-操作步骤：
-1. Read {book_dir}/chapters/chapter-{N:04d}-extract.json
-2. Read {book_dir}/伏笔台账.json
-
-更新逻辑：
-- 获取已有最大ID：扫描所有 f\d+ 格式的ID，取最大值
-- 遍历 extract.json 的 foreshadowing_activity 数组：
-  - 语义去重：判断是否与已有条目语义重复（措辞不同但含义相同的不追加）
-  - 不重复则分配新ID f{max+1:03d}
-  - 追加：{"id": "fXXX", "content": "内容", "planted_chapter": N, "status": "活跃"}
-
-3. Write {book_dir}/伏笔台账.json
-```
-
-#### Step 6c: 冲突台账更新（子代理）
-
-```
-你是冲突台账更新专家。任务：基于 extractor 输出更新冲突台账。
-
-操作步骤：
-1. Read {book_dir}/chapters/chapter-{N:04d}-extract.json
-2. Read {book_dir}/冲突台账.json
-
-更新逻辑：
-- 获取已有最大ID：扫描所有 c\d+ 格式的ID，取最大值
-- 遍历 extract.json 的 conflicts 数组：
-  - 语义去重：判断是否与已有条目语义重复
-  - 不重复则分配新ID c{max+1:03d}
-  - 追加：{"id": "cXXX", "content": "内容", "introduced_chapter": N, "status": "活跃"}
-
-3. Write {book_dir}/冲突台账.json
-```
-
-### Step 6d: handoff 重建（子代理，依赖 Step 5 + 6a + 6b + 6c 全部完成）
-
-**使用 Agent 工具**，subagent_type="general-purpose"，prompt 如下：
-
-```
-你是 session handoff 重建专家。任务：汇总所有台账和索引，生成跨会话状态同步文件。
-
-操作步骤：
-1. Read {book_dir}/chapter-index.json → 取最近3章概要
-2. Read {book_dir}/伏笔台账.json → 筛选 status≠已兑现/已关闭 的活跃条目（≤6条）
-3. Read {book_dir}/冲突台账.json → 筛选 status≠已解决 的活跃条目（≤4条）
-4. Read {book_dir}/character-state.json → 每人保留最近2条 changes（≤8个角色）
-
-按以下模板 Write {book_dir}/session-handoff.md：
-# Session Handoff
-
-## 当前进度
-第{N}章已完成，下一章编号：{N+1}
-标题：{从chapter-index取最新条目的title}
-
-## 最近3章概要
-- 第X章「标题」{从chapter-index取key_events，用分号分隔}
-
-## 角色当前状态
-- 角色名(第X章): 变化1; 变化2
-
-## 关键待处理伏笔
-- f001(伏笔内容)
-- f002(伏笔内容)
-
-## 关键待处理冲突
-- c001(冲突内容)
-
-## 台账状态
-伏笔X条活跃 / 冲突Y条活跃
-
-注意：
-- 伏笔/冲突条目数必须与台账中活跃条数一致，不可选择性删减
-- 概要从 chapter-index.json 的 key_events 同步，不用 summary 的长句
-- 概要无重复前缀（如"第3章「第3章「标题」」"是 bug）
-```
+Agent 文件：`agents/06d-handoff-builder.md`
+输出：`session-handoff.md`
 
 ### Step 7 + Step 8: 并行执行
 
-**同时发起两个 Agent 调用**：
+Step 6d 完成后，同时发起两个 Agent 调用。
 
-#### Step 7: auditor（子代理）
+#### Step 7: auditor
 
-```
-你是章节审计专家。任务：对第{N}章执行12项质量检查。
+Agent 文件：`agents/07-auditor.md`
+输出：`chapters/chapter-{N:04d}-audit.md`
 
-操作步骤：
-1. Read {book_dir}/chapters/chapter-{N:04d}.md（本章正文）
-2. Read {book_dir}/chapters/chapter-{N-1:04d}.md（前一章，如存在）
-3. Read {book_dir}/世界观.md
-4. Read {book_dir}/角色.md
-5. Read {book_dir}/伏笔台账.json
-6. Read {book_dir}/冲突台账.json
-7. Read {skill_dir}/shared/banned-words.md
+#### Step 8: logic_reviewer（可选，章节>3时执行）
 
-12项必检：
-1. 第四面墙：正文不得出现章节数、角色不知道的叙事信息
-2. 跨章一致性：关键设定与前章描写是否矛盾（用Grep搜索验证）
-3. OOC：角色言行是否符合人设
-4. 时间线：与前后章时间是否矛盾
-5. 设定一致性：是否违反世界观硬约束（重点：异能视觉效果）
-6. 大纲覆盖度：是否覆盖大纲中该章所有核心事件
-7. 伏笔处理：应兑现的是否兑现，新伏笔是否合理
-8. 文风：禁用词零触发、空泛形容词零触发、AI痕迹零触发（Grep扫描）
-9. 重复：与前后章是否有重复描写
-10. 中英混用：正文是否有不当英文
-11. 台账准确性：台账描述与正文是否一致，有无遗漏
-12. 叙事节奏：前100字进入场景、冲突位置合理、无超300字低密度段落、章末有钩子
-
-输出格式：
-## 审计结果：✅通过 / ⚠️需小修 / ❌需重写
-
-### 📊 基础数据
-- 标题：...
-- 字数：...
-- 摘要：...
-
-### 🔴 必须修
-| # | 类型 | 问题 | 建议 |
-
-### 🟡 建议修
-| # | 类型 | 问题 | 建议 |
-
-### ⚠️ 需确认
-| # | 类型 | 问题 | 建议 |
-
-Write {book_dir}/chapters/chapter-{N:04d}-audit.md
-```
-
-#### Step 8: logic_reviewer（子代理，章节>3时执行）
-
-```
-你是跨章逻辑审查专家。任务：检查第{N}章与前文的逻辑一致性。
-
-操作步骤：
-1. Read {book_dir}/世界观.md
-2. Read {book_dir}/角色.md
-3. Read {book_dir}/大纲.md
-4. Read {book_dir}/chapter-index.json
-5. Read {book_dir}/chapters/chapter-{N:04d}.md
-6. Read {book_dir}/chapters/chapter-{N-1:04d}.md（前一章）
-7. Read {book_dir}/chapters/chapter-{N-2:04d}.md（前两章，如存在）
-
-4类检查：
-1. 悬空描述：引用了未在上下文中出现过的信息
-2. 时间线矛盾：跨章事件时间冲突、距离/时间估算不合理
-3. 设定矛盾：违反世界观硬规则、角色能力/状态前后矛盾
-4. 信息前后不一致：同一事件不同描述、角色名/称呼不一致、数字不一致
-
-跨章验证（必须执行）：
-用 Grep 工具搜索 chapters/ 目录，验证以下关键词在所有章节中的一致性：
-- 本章出现的角色名（搜等级/称呼/状态）
-- 本章涉及的异能名称（搜能力描写）
-- 本章提到的数字/编号
-- 本章涉及的时间表述
-
-发现匹配后读取相关章节片段交叉对比。
-
-输出格式（追加到审计报告）：
-## 逻辑审查结果
-
-### 🔴 必须修的硬伤
-| # | 章节 | 类型 | 引用原文 | 原因 |
-
-### 🟡 建议修的
-| # | 章节 | 类型 | 引用原文 | 原因 |
-
-### ⚠️ 需确认
-| # | 章节 | 类型 | 引用原文 | 原因 |
-
-将结果追加到 {book_dir}/chapters/chapter-{N:04d}-audit.md 末尾（Read已有内容再追加写入）。
-```
+Agent 文件：`agents/08-logic-reviewer.md`
+输出：追加到 `chapters/chapter-{N:04d}-audit.md` 末尾
 
 ## 用户确认点（不可跳过）
 
@@ -587,6 +262,7 @@ Write {book_dir}/chapters/chapter-{N:04d}-audit.md
 
 | 文件 | 用途 |
 |------|------|
+| `agents/` | 各步骤子代理指令（14个独立文件） |
 | `references/data-schemas.md` | 所有 JSON 数据结构定义（含中间文件） |
 | `references/context-budget.md` | 上下文裁剪策略 + context.json 格式 |
 | `references/audit-checklist.md` | 12 项审计 + 4 类逻辑审查完整清单 |
