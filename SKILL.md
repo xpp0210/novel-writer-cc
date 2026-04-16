@@ -36,16 +36,20 @@ description: |
   │
   ├─ Step 4: Agent(extractor) → chapters/chapter-{N}-extract.json
   │
-  ├─ Step 5+6: Agent(state_tracker) + Agent(settler)  ← 并行
+  ├─ Step 5 + 6a + 6b + 6c: Agent(state_tracker) + Agent(索引更新) + Agent(伏笔更新) + Agent(冲突更新)  ← 并行
   │     ├─ state_tracker → character-state.json
-  │     └─ settler → chapter-index.json + 台账 + session-handoff.md
+  │     ├─ 6a 索引更新 → chapter-index.json
+  │     ├─ 6b 伏笔更新 → 伏笔台账.json
+  │     └─ 6c 冲突更新 → 冲突台账.json
+  │
+  ├─ Step 6d: Agent(handoff重建) → session-handoff.md
   │
   └─ Step 7+8: Agent(auditor) + Agent(logic_reviewer)  ← 并行
         ├─ auditor → chapters/chapter-{N}-audit.md
         └─ logic_reviewer → 追加到 audit.md（可选）
 ```
 
-**并行规则**：Step 2a/2b/2c 无依赖可并行；Step 5/6 无依赖可并行；Step 7/8 无依赖可并行。其余步骤严格串行。
+**并行规则**：Step 2a/2b/2c 无依赖可并行；Step 5/6a/6b/6c 无依赖可并行；Step 7/8 无依赖可并行。其余步骤严格串行。
 
 ## 书籍目录结构
 
@@ -114,7 +118,8 @@ description: |
 | `chapter-{N}-context.json` 存在 | Step 2d 已完成 | 跳过 |
 | `chapter-{N}.md` 存在 | Step 3 已完成 | 跳过 |
 | `chapter-{N}-extract.json` 存在 | Step 4 已完成 | 跳过 |
-| chapter-index.json 最新条目 number=N | Step 5+6 已完成 | 跳过 |
+| chapter-index.json 最新条目 number=N + 台账已更新 | Step 5+6a+6b+6c 已完成 | 跳过 |
+| session-handoff.md 已更新且包含第N章 | Step 6d 已完成 | 跳过 |
 | `chapter-{N}-audit.md` 存在 | Step 7 已完成 | 跳过 |
 
 展示断点状态给用户，确认后从断点继续。
@@ -305,9 +310,9 @@ title 从正文第一个标题或第一段推断。
 word_count 统计正文中文字符数（不含标点和空格）。
 ```
 
-### Step 5 + Step 6: 并行执行
+### Step 5 + 6a + 6b + 6c: 并行执行
 
-**同时发起两个 Agent 调用**：
+**同时发起四个 Agent 调用**（Step 4 完成后）：
 
 #### Step 5: state_tracker（子代理）
 
@@ -337,54 +342,95 @@ word_count 统计正文中文字符数（不含标点和空格）。
 注意：保留该角色之前的 changes 记录，只追加新变化。未出场的角色保持原样。
 ```
 
-#### Step 6: settler（子代理）
+#### Step 6a: chapter-index 更新（子代理）
 
 ```
-你是章节结算专家。任务：基于 extractor 的输出更新所有台账文件。
+你是章节索引更新专家。任务：基于 extractor 输出更新 chapter-index.json。
 
 操作步骤：
-1. Read {book_dir}/chapters/chapter-{N:04d}-extract.json（extractor 输出的结构化 JSON）
+1. Read {book_dir}/chapters/chapter-{N:04d}-extract.json
+2. Read {book_dir}/chapter-index.json
 
-#### 6.1 更新 chapter-index.json
-Read {book_dir}/chapter-index.json
+更新逻辑：
 - 如果已存在 number={N} 的条目，删除旧条目
 - 追加新条目：{number: N, title, status: "已通过", word_count, summary, key_events(≤5), character_state_changes(≤4), foreshadowing_activity(≤4)}
-- 摘要瘦身：距当前章>5只保留number+title（详情追加到chapters/archive-summary.md）；3-5只保留summary；≤2保留完整；总大小≤5000字节
-Write {book_dir}/chapter-index.json
 
-#### 6.2 更新伏笔台账.json
-Read {book_dir}/伏笔台账.json
-- 获取已有最大ID：扫描所有 f\d+ 格式的ID
-- 遍历 extract.json 的 foreshadowing_activity：
-  - 语义去重：判断是否与已有条目语义重复
+摘要瘦身：
+- 距当前章>5：只保留 number + title，详情追加到 chapters/archive-summary.md（先 Read 再追加 Write）
+- 距当前章 3-5：只保留 number + title + summary
+- 距当前章≤2：保留完整字段
+- 总大小≤5000字节：如果超限，继续压缩更早章节
+
+3. Write {book_dir}/chapter-index.json
+```
+
+#### Step 6b: 伏笔台账更新（子代理）
+
+```
+你是伏笔台账更新专家。任务：基于 extractor 输出更新伏笔台账。
+
+操作步骤：
+1. Read {book_dir}/chapters/chapter-{N:04d}-extract.json
+2. Read {book_dir}/伏笔台账.json
+
+更新逻辑：
+- 获取已有最大ID：扫描所有 f\d+ 格式的ID，取最大值
+- 遍历 extract.json 的 foreshadowing_activity 数组：
+  - 语义去重：判断是否与已有条目语义重复（措辞不同但含义相同的不追加）
   - 不重复则分配新ID f{max+1:03d}
   - 追加：{"id": "fXXX", "content": "内容", "planted_chapter": N, "status": "活跃"}
-Write {book_dir}/伏笔台账.json
 
-#### 6.3 更新冲突台账.json
-Read {book_dir}/冲突台账.json
-- 同上逻辑，ID前缀为 c
-Write {book_dir}/冲突台账.json
+3. Write {book_dir}/伏笔台账.json
+```
 
-#### 6.4 更新 session-handoff.md
-Read 所有台账获取活跃条目
-Read chapter-index.json 获取最近3章概要
-Read character-state.json 获取角色状态
+#### Step 6c: 冲突台账更新（子代理）
+
+```
+你是冲突台账更新专家。任务：基于 extractor 输出更新冲突台账。
+
+操作步骤：
+1. Read {book_dir}/chapters/chapter-{N:04d}-extract.json
+2. Read {book_dir}/冲突台账.json
+
+更新逻辑：
+- 获取已有最大ID：扫描所有 c\d+ 格式的ID，取最大值
+- 遍历 extract.json 的 conflicts 数组：
+  - 语义去重：判断是否与已有条目语义重复
+  - 不重复则分配新ID c{max+1:03d}
+  - 追加：{"id": "cXXX", "content": "内容", "introduced_chapter": N, "status": "活跃"}
+
+3. Write {book_dir}/冲突台账.json
+```
+
+### Step 6d: handoff 重建（子代理，依赖 Step 5 + 6a + 6b + 6c 全部完成）
+
+**使用 Agent 工具**，subagent_type="general-purpose"，prompt 如下：
+
+```
+你是 session handoff 重建专家。任务：汇总所有台账和索引，生成跨会话状态同步文件。
+
+操作步骤：
+1. Read {book_dir}/chapter-index.json → 取最近3章概要
+2. Read {book_dir}/伏笔台账.json → 筛选 status≠已兑现/已关闭 的活跃条目（≤6条）
+3. Read {book_dir}/冲突台账.json → 筛选 status≠已解决 的活跃条目（≤4条）
+4. Read {book_dir}/character-state.json → 每人保留最近2条 changes（≤8个角色）
+
 按以下模板 Write {book_dir}/session-handoff.md：
 # Session Handoff
 
 ## 当前进度
 第{N}章已完成，下一章编号：{N+1}
-标题：{title}
+标题：{从chapter-index取最新条目的title}
 
 ## 最近3章概要
-- 第X章「标题」摘要
+- 第X章「标题」{从chapter-index取key_events，用分号分隔}
 
 ## 角色当前状态
 - 角色名(第X章): 变化1; 变化2
 
 ## 关键待处理伏笔
 - f001(伏笔内容)
+- f002(伏笔内容)
 
 ## 关键待处理冲突
 - c001(冲突内容)
@@ -392,11 +438,10 @@ Read character-state.json 获取角色状态
 ## 台账状态
 伏笔X条活跃 / 冲突Y条活跃
 
-#### 6.5 台账瘦身（每5章执行一次）
-如果 {N} 是5的倍数：
-- 遍历伏笔台账：status=已兑现→删除note；status=已推进且距planted_chapter>10→删除note；其他活跃→note截断到80字
-- 对冲突台账执行相同操作
-- 重新 Write 两个台账文件
+注意：
+- 伏笔/冲突条目数必须与台账中活跃条数一致，不可选择性删减
+- 概要从 chapter-index.json 的 key_events 同步，不用 summary 的长句
+- 概要无重复前缀（如"第3章「第3章「标题」」"是 bug）
 ```
 
 ### Step 7 + Step 8: 并行执行
@@ -509,9 +554,11 @@ Write {book_dir}/chapters/chapter-{N:04d}-audit.md
 
 任何导致正文内容变化的操作，完成后必须执行 resync（详见 `references/sync-protocol.md`）：
 
-1. 发起 Step 4(extractor) + Step 5(state_tracker) + Step 6(settler) 子代理
-2. 删除旧审计报告
-3. 大段重写（>30% 内容变动）→ 重新发起 Step 7+8；小幅修补 → 跳过
+1. 发起 Step 4(extractor) 子代理
+2. Step 4 完成后，并行发起 Step 5(state_tracker) + Step 6a(索引) + Step 6b(伏笔) + Step 6c(冲突) 子代理
+3. 上述全部完成后，发起 Step 6d(handoff重建) 子代理
+4. 删除旧审计报告
+5. 大段重写（>30% 内容变动）→ 重新发起 Step 7+8；小幅修补 → 跳过
 
 ## session-handoff.md 规则
 
